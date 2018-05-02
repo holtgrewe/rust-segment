@@ -2,5 +2,20 @@
 name = "rust-segment"
 version = "0.1.0"
 authors = ["Manuel Holtgrewe <manuel.holtgrewe@bihealth.de>"]
+build = "build.rs"
+description = "This library provides bindings to segmentation algorithms in C/Fortran"
+readme = "README.md"
+keywords = ["bioinformatics", "cnv", "acgh"]
+license = "GPL-3.0"
+repository = "https://github.com/holtgrewe/rust-segment.git"
+documentation = "https://docs.rs/rust-segment"
 
 [dependencies]
+libc = "0.2"
+
+[features]
+default = []
+
+[build-dependencies]
+fs-utils = "1.0"
+bindgen = "0.36.0"

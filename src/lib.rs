@@ -1,3 +1,5 @@
+pub mod haarseg;
+
 #[cfg(test)]
 mod tests {
     #[test]
