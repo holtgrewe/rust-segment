@@ -10,8 +10,6 @@ extern crate test_logger;
 #[macro_use]
 extern crate assert_approx_eq;
 
-extern crate rustr;
-
 pub mod haarseg;
 pub mod haarseglib;
 mod stats;

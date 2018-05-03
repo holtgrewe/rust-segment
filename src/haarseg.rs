@@ -1,7 +1,5 @@
 use super::haarseglib;
 
-use rustr::rmath::pnorm;
-
 use stats::Stats;
 
 use std::ops::Range;
@@ -37,6 +35,11 @@ impl HaarSegResult {
 /// Value to scale MAD with (assuming normality).
 const NORMAL_MAD_SCALE: f64 = 0.6745;
 
+// Cumulative density function of the normal distribution
+fn pnorm(mean: f64, sd: f64) -> f64 {
+    0.5 * (1.0 + unsafe { haarseglib::erfl(mean / sd / 2.0_f64.sqrt()) })
+}
+
 /// FDR thresholding.
 fn fdr_thresh(x: &[f64], q: f64, sigma: f64) -> f64 {
     let n = x.len();
@@ -55,7 +58,7 @@ fn fdr_thresh(x: &[f64], q: f64, sigma: f64) -> f64 {
 
     let p = x_sorted
         .iter()
-        .map(|&q| 2.0 * (1.0 - pnorm(q, 0.0, sigma, true as i32, false as i32)))
+        .map(|&q| 2.0 * (1.0 - pnorm(q, sigma)))
         .collect::<Vec<f64>>();
     let k = p.iter()
         .enumerate()
