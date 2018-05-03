@@ -6,7 +6,7 @@ use std::ops::Range;
 use std::ptr;
 
 /// The segment with corresponding value.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HaarSegment {
     /// Range in input vector of segment.
     pub range: Range<usize>,
@@ -15,7 +15,7 @@ pub struct HaarSegment {
 }
 
 /// Segmentation result.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HaarSegResult {
     /// Resulting segmented signal.
     pub segments: Vec<HaarSegment>,
@@ -36,8 +36,8 @@ impl HaarSegResult {
 const NORMAL_MAD_SCALE: f64 = 0.6745;
 
 // Cumulative density function of the normal distribution
-fn pnorm(mean: f64, sd: f64) -> f64 {
-    0.5 * (1.0 + unsafe { haarseglib::erfl(mean / sd / 2.0_f64.sqrt()) })
+fn pnorm(x: f64, mean: f64, sd: f64) -> f64 {
+    0.5 * (1.0 + unsafe { haarseglib::erfl((x - mean) / sd / 2.0_f64.sqrt()) })
 }
 
 /// FDR thresholding.
@@ -58,7 +58,7 @@ fn fdr_thresh(x: &[f64], q: f64, sigma: f64) -> f64 {
 
     let p = x_sorted
         .iter()
-        .map(|&q| 2.0 * (1.0 - pnorm(q, sigma)))
+        .map(|&q| 2.0 * (1.0 - pnorm(q, 0.0, sigma)))
         .collect::<Vec<f64>>();
     let k = p.iter()
         .enumerate()
@@ -125,9 +125,10 @@ pub fn seg_haar(
         conv_result
             .iter()
             .map(|x| x.abs())
+            .filter(|&x| x > 1e-5)
             .collect::<Vec<f64>>()
             .as_slice()
-            .median() / NORMAL_MAD_SCALE
+            .median() / NORMAL_MAD_SCALE * 5.0
     };
 
     // Perform chromosome-wise segmentation.
@@ -202,12 +203,17 @@ pub fn seg_haar(
             breakpoints.push(chrom_intensities.len());
             breakpoints
         };
+        let offset = result.seg_values.len();
         for i in 1..(breakpoints.len()) {
-            let range = Range {
+            let range_here = Range {
                 start: breakpoints[i - 1],
                 end: breakpoints[i],
             };
-            let value = chrom_intensities[range.clone()].mean();
+            let value = chrom_intensities[range_here.clone()].mean();
+            let range = Range {
+                start: offset + range_here.start,
+                end: offset + range_here.end,
+            };
             result.add_segment(range, value);
         }
     }
