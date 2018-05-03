@@ -12,6 +12,10 @@ documentation = "https://docs.rs/rust-segment"
 
 [dependencies]
 libc = "0.2"
+log = "*"
+env_logger = "*"
+test-logger = "*"
+rustr = "*"
 
 [features]
 default = []
@@ -19,3 +23,6 @@ default = []
 [build-dependencies]
 fs-utils = "1.0"
 bindgen = "0.36.0"
+
+[dev-dependencies]
+assert_approx_eq = "1.0.0"

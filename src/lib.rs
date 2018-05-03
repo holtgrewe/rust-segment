@@ -1,12 +1,19 @@
-pub mod haarseg;
-pub mod haarseglib;
-
-pub use haarseg::{seg_haar, HaarSegResult};
+#[macro_use]
+extern crate log;
+extern crate env_logger;
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+#[macro_use]
+extern crate test_logger;
+
+#[cfg(test)]
+#[macro_use]
+extern crate assert_approx_eq;
+
+extern crate rustr;
+
+pub mod haarseg;
+pub mod haarseglib;
+mod stats;
+
+pub use haarseg::{seg_haar, HaarSegResult};

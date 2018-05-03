@@ -34,4 +34,6 @@
  
  int StepConv(const double * signal, int signalSize, int pulseSize, double pulseHeight, double * result);
  
+ int PulseConv(const double * signal, int signalSize, int pulseSize, double pulseHeight, double * result);
+
 #endif /*HAARSEG_H_*/

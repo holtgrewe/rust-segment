@@ -13,12 +13,12 @@ default: lib-static
 
 clean:
 	rm -f libhaarseg.a HaarSeg.o
-	
+
 lib-static: libhaarseg.a
 
 libhaarseg.a: HaarSeg.o
 	@-rm -f $@
-	$(AR) -rc $@ $<
+	$(AR) -rc $@ $^
 	-$(RANLIB) $@
 
 HaarSeg.o: pkg/HaarSeg/src/HaarSeg.c
