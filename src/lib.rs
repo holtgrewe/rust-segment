@@ -16,4 +16,6 @@ pub mod haarseg;
 pub mod haarseglib;
 mod stats;
 
-pub use haarseg::{adjust_breaks, reject_nonaberrant, seg_haar, HaarSegResult};
+pub use haarseg::{
+    adjust_breaks, reject_nonaberrant, reject_nonaberrant_pvalue, seg_haar, HaarSegResult,
+};

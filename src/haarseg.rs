@@ -1,10 +1,11 @@
 use super::haarseglib;
 
-use statrs::function::erf::erf;
 use stats::Stats;
 
 use std::ops::Range;
 use std::ptr;
+
+use statrs::distribution::{StudentsT, Univariate};
 
 /// The segment with corresponding value.
 #[derive(Debug, Clone)]
@@ -37,18 +38,16 @@ impl HaarSegResult {
 const NORMAL_MAD_SCALE: f64 = 0.6745;
 
 // Cumulative density function of the normal distribution
-// fn pnorm(x: f64, mean: f64, sd: f64) -> f64 {
-//     const CHEAT_FACTOR: f64 = 5.0;
-//     0.5 * (1.0 + erf((x - mean) / sd / 2.0_f64.sqrt())) / CHEAT_FACTOR
-// }
+fn pnorm(x: f64, mean: f64, sd: f64) -> f64 {
+    0.5 * unsafe { haarseglib::erfl((x - mean) / sd / 2.0_f64.sqrt()) }
+}
 
 /// Compute p value from distribution in `mu = 0` and given `sigma` for the given `x`.
 fn pvalue(x: f64, sigma: f64) -> f64 {
-    // TODO: normal with cheat factor or poisson better?
-    // 2.0 * (1.0 - pnorm(x, 0.0, sigma))
-    use statrs::distribution::{Univariate, Poisson};
-    let dist = Poisson::new(sigma * sigma).unwrap();
-    return dist.cdf(x);
+    2.0 * (1.0 - pnorm(x, 0.0, sigma))
+    // use statrs::distribution::{Univariate, Poisson};
+    // let dist = Poisson::new(sigma * sigma).unwrap();
+    // return 1.0 - dist.cdf(x);
 }
 
 /// FDR thresholding.
@@ -321,6 +320,91 @@ pub fn reject_nonaberrant(
     for seg in &seg_result.segments {
         let range = seg.range.clone();
         let value = if seg.value.abs() > m * est_sigma {
+            seg.value
+        } else {
+            0.0
+        };
+
+        curr = match curr {
+            Some(curr) => {
+                if value != curr.value {
+                    // Start new segment.
+                    segments.push(curr);
+                    Some(HaarSegment { range, value })
+                } else {
+                    // Extend old segment.
+                    Some(HaarSegment {
+                        range: Range {
+                            end: seg.range.end,
+                            ..curr.range
+                        },
+                        ..curr
+                    })
+                }
+            }
+            None => Some(HaarSegment { range, value }),
+        };
+
+        seg_values.extend_from_slice(&vec![value; seg.range.len()]);
+    }
+    // Add last segment, if any, seg_values are already expanded.
+    if let Some(curr) = curr {
+        segments.push(curr);
+    }
+
+    assert_eq!(seg_values.len(), intensities.len());
+    assert!(segments.len() <= seg_result.segments.len());
+
+    HaarSegResult {
+        segments,
+        seg_values,
+    }
+}
+
+// Some helper functions for `HaarSegment` to use in `reject_nonaberrant_pvalue()`.
+impl HaarSegment {
+    /// Compute P-value of segment.
+    fn p_value(&self, intensities: &[f64], p_value_threshold: f64) -> f64 {
+        // TODO: robust handling of X/Y chromosome
+        // TODO: is this correct?
+        // Note that coverages are already normalized.
+
+        // Compute test statistics and obtain distribution.
+        let t = (1.0 - self.value) / self.cov_sd(intensities) * (self.range.len() as f64).sqrt();
+        let dist = StudentsT::new(0.0, 1.0, (self.range.len() - 1) as f64)
+            .expect("Could not find t distribution");
+        // Compute p value.
+        let p = 1.0 - dist.cdf(t);
+        // println!("Uncorrected P-value: {}", p);
+        // Return P-value corrected for multiple testing.
+        p * p_value_threshold / (self.range.len() as f64)
+    }
+
+    // Compute SD of intenties of segment.
+    fn cov_sd(&self, intensities: &[f64]) -> f64 {
+        (intensities[self.range.clone()]
+            .iter()
+            .map(|x| (x - self.value) * (x - self.value))
+            .sum::<f64>() / (self.range.len() as f64 - 1.0))
+            .sqrt()
+    }
+}
+
+/// Implement simple approach for aberrant interval detection as proposed in CNVnator paper.
+///
+/// Segments with a value above `m * sigma` will be accepted, the others rejected.
+pub fn reject_nonaberrant_pvalue(
+    seg_result: &HaarSegResult,
+    intensities: &[f64],
+    p_value_threshold: f64,
+) -> HaarSegResult {
+    // Rebuild new `HaarSegResult`.
+    let mut segments: Vec<HaarSegment> = Vec::new();
+    let mut seg_values: Vec<f64> = Vec::new();
+    let mut curr: Option<HaarSegment> = None;
+    for seg in &seg_result.segments {
+        let range = seg.range.clone();
+        let value = if range.len() >= 2 && seg.p_value(intensities, p_value_threshold) < p_value_threshold {
             seg.value
         } else {
             0.0
