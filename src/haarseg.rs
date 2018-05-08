@@ -252,18 +252,31 @@ pub fn adjust_breaks(seg_result: &HaarSegResult, intensities: &[f64]) -> (usize,
     let mut segments: Vec<HaarSegment> = Vec::new();
     let mut seg_values: Vec<f64> = Vec::new();
     let mut prev: usize = 0;
-    for (i, end) in new_peak_locs.iter().enumerate() {
-        let value = seg_result.segments[i].value;
+    for (i, end) in new_peak_locs.iter().take_while(|i| **i >= 0).enumerate() {
+        if prev != *end as usize {
+            let value = seg_result.segments[i].value;
+            segments.push(HaarSegment {
+                range: Range {
+                    start: prev,
+                    end: *end as usize,
+                },
+                value: value,
+            });
+            seg_values.extend_from_slice(&vec![value; *end as usize - prev]);
+            prev = *end as usize;
+        }
+    }
+
+    if prev != intensities.len() {
+        let value = seg_result.segments.last().unwrap().value;
         segments.push(HaarSegment {
             range: Range {
                 start: prev,
-                end: *end as usize,
+                end: intensities.len(),
             },
             value: value,
         });
-        prev = *end as usize;
-
-        seg_values.extend_from_slice(&vec![value; *end as usize - prev]);
+        seg_values.extend_from_slice(&vec![value; intensities.len() - prev]);
     }
 
     (
