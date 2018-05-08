@@ -37,7 +37,7 @@ const NORMAL_MAD_SCALE: f64 = 0.6745;
 
 // Cumulative density function of the normal distribution
 fn pnorm(x: f64, mean: f64, sd: f64) -> f64 {
-    0.5 * (1.0 + unsafe { haarseglib::erfl((x - mean) / sd / 2.0_f64.sqrt()) })
+    0.5 * (1.0 + erf((x - mean) / sd / 2.0_f64.sqrt()))
 }
 
 /// FDR thresholding.
