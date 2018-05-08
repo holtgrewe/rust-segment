@@ -37,8 +37,18 @@ impl HaarSegResult {
 const NORMAL_MAD_SCALE: f64 = 0.6745;
 
 // Cumulative density function of the normal distribution
-fn pnorm(x: f64, mean: f64, sd: f64) -> f64 {
-    0.5 * (1.0 + erf((x - mean) / sd / 2.0_f64.sqrt()))
+// fn pnorm(x: f64, mean: f64, sd: f64) -> f64 {
+//     const CHEAT_FACTOR: f64 = 5.0;
+//     0.5 * (1.0 + erf((x - mean) / sd / 2.0_f64.sqrt())) / CHEAT_FACTOR
+// }
+
+/// Compute p value from distribution in `mu = 0` and given `sigma` for the given `x`.
+fn pvalue(x: f64, sigma: f64) -> f64 {
+    // TODO: normal with cheat factor or poisson better?
+    // 2.0 * (1.0 - pnorm(x, 0.0, sigma))
+    use statrs::distribution::{Univariate, Poisson};
+    let dist = Poisson::new(sigma * sigma).unwrap();
+    return dist.cdf(x);
 }
 
 /// FDR thresholding.
@@ -55,11 +65,9 @@ fn fdr_thresh(x: &[f64], q: f64, sigma: f64) -> f64 {
     let mut x_sorted = Vec::from(x.clone());
     x_sorted.sort_by(|a, b| b.partial_cmp(a).unwrap());
 
-    // pnorm(q, mean = 0, sd = 1, lower.tail = TRUE, log.p = FALSE)
-
     let p = x_sorted
         .iter()
-        .map(|&q| 2.0 * (1.0 - pnorm(q, 0.0, sigma)))
+        .map(|&q| pvalue(q, sigma))
         .collect::<Vec<f64>>();
     let k = p.iter()
         .enumerate()
