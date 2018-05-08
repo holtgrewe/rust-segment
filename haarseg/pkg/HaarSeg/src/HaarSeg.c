@@ -260,11 +260,13 @@
                   const int * peakLoc,
                   int * newPeakLoc) {
     int k,m,p;
+    int numAdjusted;
     int n1,n2;
     int bestOffset;
     double s1, s2, ss1, ss2;
     double score, bestScore;
     
+    numAdjusted = 0;
     k = 0;
     while (peakLoc[k] != NOT_VALID) {
         newPeakLoc[k] = peakLoc[k];
@@ -328,10 +330,13 @@
             }
         }/* for p */
         newPeakLoc[k] += bestOffset; 
+        if (bestOffset != 0) {
+            numAdjusted += 1;
+        }
         k++;
     }/* while newPeakLoc */
     
-    return OK;
+    return numAdjusted;
  }/* int AdjustBreaks */
  
 /*

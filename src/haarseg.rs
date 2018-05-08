@@ -1,5 +1,6 @@
 use super::haarseglib;
 
+use statrs::function::erf::erf;
 use stats::Stats;
 
 use std::ops::Range;
@@ -221,6 +222,123 @@ pub fn seg_haar(
     trace!("Done with segmentation using seg_haar()");
 
     result
+}
+
+/// Refine segmentation by moving breaks left or right.
+///
+/// # Returns
+///
+/// A pair (`n`, `res`) with
+///
+/// - `n` -- The number of breaks that were adjusted.
+/// - `res` -- The updated segmentation result.
+pub fn adjust_breaks(seg_result: &HaarSegResult, intensities: &[f64]) -> (usize, HaarSegResult) {
+    let mut peak_locs = seg_result.segments[1..seg_result.segments.len()]
+        .iter()
+        .map(|x| x.range.start as i32)
+        .collect::<Vec<i32>>();
+    peak_locs.push(-1);
+    let peak_locs = peak_locs;
+    let mut new_peak_locs = vec![-1_i32; peak_locs.len()];
+    let num_adjusted = unsafe {
+        haarseglib::AdjustBreaks(
+            intensities.as_ptr(),
+            intensities.len() as i32,
+            peak_locs.as_ptr(),
+            new_peak_locs.as_mut_ptr(),
+        )
+    };
+
+    let mut segments: Vec<HaarSegment> = Vec::new();
+    let mut seg_values: Vec<f64> = Vec::new();
+    let mut prev: usize = 0;
+    for (i, end) in new_peak_locs.iter().enumerate() {
+        let value = seg_result.segments[i].value;
+        segments.push(HaarSegment {
+            range: Range {
+                start: prev,
+                end: *end as usize,
+            },
+            value: value,
+        });
+        prev = *end as usize;
+
+        seg_values.extend_from_slice(&vec![value; *end as usize - prev]);
+    }
+
+    (
+        num_adjusted as usize,
+        HaarSegResult {
+            segments,
+            seg_values,
+        },
+    )
+}
+
+/// Implement simple approach for aberrant interval detection as proposed in HaarSeg paper.
+///
+/// Segments with a value above `m * sigma` will be accepted, the others rejected.
+pub fn reject_nonaberrant(
+    seg_result: &HaarSegResult,
+    intensities: &[f64],
+    m: f64,
+) -> HaarSegResult {
+    // Estimate sigma.
+    let est_sigma = seg_result
+        .seg_values
+        .iter()
+        .zip(intensities.iter())
+        .map(|(y, x)| (*y - *x).abs())
+        .collect::<Vec<f64>>()
+        .as_slice()
+        .median() / 0.6745;
+
+    // Rebuild new `HaarSegResult`.
+    let mut segments: Vec<HaarSegment> = Vec::new();
+    let mut seg_values: Vec<f64> = Vec::new();
+    let mut curr: Option<HaarSegment> = None;
+    for seg in &seg_result.segments {
+        let range = seg.range.clone();
+        let value = if seg.value.abs() > m * est_sigma {
+            seg.value
+        } else {
+            0.0
+        };
+
+        curr = match curr {
+            Some(curr) => {
+                if value != curr.value {
+                    // Start new segment.
+                    segments.push(curr);
+                    Some(HaarSegment { range, value })
+                } else {
+                    // Extend old segment.
+                    Some(HaarSegment {
+                        range: Range {
+                            end: seg.range.end,
+                            ..curr.range
+                        },
+                        ..curr
+                    })
+                }
+            }
+            None => Some(HaarSegment { range, value }),
+        };
+
+        seg_values.extend_from_slice(&vec![value; seg.range.len()]);
+    }
+    // Add last segment, if any, seg_values are already expanded.
+    if let Some(curr) = curr {
+        segments.push(curr);
+    }
+
+    assert_eq!(seg_values.len(), intensities.len());
+    assert!(segments.len() <= seg_result.segments.len());
+
+    HaarSegResult {
+        segments,
+        seg_values,
+    }
 }
 
 #[cfg(test)]
