@@ -1,38 +1,10 @@
 use super::haarseglib;
+pub use super::shared::{Segment, Segmentation};
 
 use stats::Stats;
 
 use std::ops::Range;
 use std::ptr;
-
-use statrs::distribution::{StudentsT, Univariate};
-
-/// The segment with corresponding value.
-#[derive(Debug, Clone)]
-pub struct HaarSegment {
-    /// Range in input vector of segment.
-    pub range: Range<usize>,
-    /// Value of the signal segment.
-    pub value: f64,
-}
-
-/// Segmentation result.
-#[derive(Debug, Clone)]
-pub struct HaarSegResult {
-    /// Resulting segmented signal.
-    pub segments: Vec<HaarSegment>,
-    /// Segmented values, same length as `intensities` from input.
-    pub seg_values: Vec<f64>,
-}
-
-impl HaarSegResult {
-    /// Add a segment with the given `range` and `value`.
-    fn add_segment(&mut self, range: Range<usize>, value: f64) {
-        let old_len = self.seg_values.len();
-        self.seg_values.resize(old_len + range.len(), value);
-        self.segments.push(HaarSegment { range, value });
-    }
-}
 
 /// Value to scale MAD with (assuming normality).
 const NORMAL_MAD_SCALE: f64 = 0.6745;
@@ -88,9 +60,9 @@ fn fdr_thresh(x: &[f64], q: f64, sigma: f64) -> f64 {
 ///
 /// # Args
 ///
-/// - `intensities` - corresponds to `I`
+/// - `values_log2` - corresponds to `I`
 /// - `weights` - corresponds to `W`
-/// - `raw_intensities` - corresponds to `rI`
+/// - `raw_values` - corresponds to `rI`
 /// - `chrom_pos` - corresponds to `chromPos`
 /// - `breaks_fdr_q` - corresponds to `breaksFdrQ` (R default: `0.001`)
 /// - `haar_start_level` - corresponds to `haarStartLevel` (R default: `1`)
@@ -100,19 +72,16 @@ fn fdr_thresh(x: &[f64], q: f64, sigma: f64) -> f64 {
 ///
 /// The segmentation result.
 pub fn seg_haar(
-    intensities: &[f64],
+    values_log2: &[f64],
     _weights: Option<&[f64]>,
-    _raw_intensities: Option<&[f64]>,
+    _raw_values: Option<&[f64]>,
     chrom_pos: &[Range<usize>],
     breaks_fdr_q: f64,
     haar_start_level: u32,
     haar_end_level: u32,
-) -> HaarSegResult {
-    let num_probes = intensities.len();
-    let mut result = HaarSegResult {
-        segments: Vec::new(),
-        seg_values: Vec::new(),
-    };
+) -> Segmentation {
+    let num_probes = values_log2.len();
+    let mut result = Segmentation::new();
 
     trace!("Starting segmentation using seg_haar()");
 
@@ -122,7 +91,7 @@ pub fn seg_haar(
         let mut conv_result = vec![0.0_f64; num_probes];
         unsafe {
             haarseglib::HaarConv(
-                intensities.as_ptr(),
+                values_log2.as_ptr(),
                 ptr::null(),
                 num_probes as i32,
                 1_i32,
@@ -143,7 +112,7 @@ pub fn seg_haar(
     trace!("Performing chromosome-wise segmentation");
     for (i, chrom_range) in chrom_pos.iter().enumerate() {
         trace!("{}-th chromosome from entries {:?}", i, chrom_range);
-        let chrom_intensities = &intensities[chrom_range.clone()];
+        let chrom_values = &values_log2[chrom_range.clone()];
         let chrom_num_probes = chrom_range.len();
 
         let mut uni_peak_loc = vec![-1_i32; 1];
@@ -157,7 +126,7 @@ pub fn seg_haar(
             unsafe {
                 // `rConvAndPeak(...)`
                 haarseglib::HaarConv(
-                    chrom_intensities.as_ptr(),
+                    chrom_values.as_ptr(),
                     ptr::null(),
                     chrom_num_probes as i32,
                     step_half_size,
@@ -208,21 +177,40 @@ pub fn seg_haar(
         let breakpoints = {
             let mut breakpoints = vec![0_usize];
             breakpoints.extend(uni_peak_loc[0..num_breakpoints].iter().map(|&x| x as usize));
-            breakpoints.push(chrom_intensities.len());
+            breakpoints.push(chrom_values.len());
             breakpoints
         };
-        let offset = result.seg_values.len();
+        let offset = result.values_log2.len();
         for i in 1..(breakpoints.len()) {
             let range_here = Range {
                 start: breakpoints[i - 1],
                 end: breakpoints[i],
             };
-            let value = chrom_intensities[range_here.clone()].mean();
+
             let range = Range {
                 start: offset + range_here.start,
                 end: offset + range_here.end,
             };
-            result.add_segment(range, value);
+
+            let mean_log2 = chrom_values[range_here.clone()].mean();
+            let std_dev_log2 = chrom_values[range_here.clone()].std_dev();
+            let values = chrom_values[range_here.clone()]
+                .iter()
+                .map(|x| 2_f64.powf(*x))
+                .collect::<Vec<f64>>();
+            let mean = values.mean();
+            let std_dev = values.std_dev();
+
+            result.extend(
+                &Segment {
+                    range,
+                    mean,
+                    std_dev,
+                    mean_log2,
+                    std_dev_log2,
+                },
+                1e-5,
+            );
         }
     }
 
@@ -239,8 +227,8 @@ pub fn seg_haar(
 ///
 /// - `n` -- The number of breaks that were adjusted.
 /// - `res` -- The updated segmentation result.
-pub fn adjust_breaks(seg_result: &HaarSegResult, intensities: &[f64]) -> (usize, HaarSegResult) {
-    let mut peak_locs = seg_result.segments[1..seg_result.segments.len()]
+pub fn adjust_breaks(segmentation: &Segmentation, values: &[f64]) -> (usize, Segmentation) {
+    let mut peak_locs = segmentation.segments[1..segmentation.segments.len()]
         .iter()
         .map(|x| x.range.start as i32)
         .collect::<Vec<i32>>();
@@ -249,91 +237,92 @@ pub fn adjust_breaks(seg_result: &HaarSegResult, intensities: &[f64]) -> (usize,
     let mut new_peak_locs = vec![-1_i32; peak_locs.len()];
     let num_adjusted = unsafe {
         haarseglib::AdjustBreaks(
-            intensities.as_ptr(),
-            intensities.len() as i32,
+            values.as_ptr(),
+            values.len() as i32,
             peak_locs.as_ptr(),
             new_peak_locs.as_mut_ptr(),
         )
     };
 
-    let mut segments: Vec<HaarSegment> = Vec::new();
+    let mut segments: Vec<Segment> = Vec::new();
     let mut seg_values: Vec<f64> = Vec::new();
     let mut prev: usize = 0;
     for (i, end) in new_peak_locs.iter().take_while(|i| **i >= 0).enumerate() {
         if prev != *end as usize {
-            let value = seg_result.segments[i].value;
-            segments.push(HaarSegment {
+            let segment = segmentation.segments[i].clone();
+            segments.push(Segment {
                 range: Range {
                     start: prev,
                     end: *end as usize,
                 },
-                value: value,
+                ..segment
             });
-            seg_values.extend_from_slice(&vec![value; *end as usize - prev]);
+            seg_values.resize(values.len() + *end as usize - prev, segment.mean);
             prev = *end as usize;
         }
     }
 
-    if prev != intensities.len() {
-        let value = seg_result.segments.last().unwrap().value;
-        segments.push(HaarSegment {
+    if prev != seg_values.len() {
+        let segment = segmentation.segments.last().unwrap().clone();
+        segments.push(Segment {
             range: Range {
                 start: prev,
-                end: intensities.len(),
+                end: seg_values.len(),
             },
-            value: value,
+            ..segment
         });
-        seg_values.extend_from_slice(&vec![value; intensities.len() - prev]);
+        let new_len = values.len() + seg_values.len() - prev;
+        seg_values.resize(new_len, segment.mean);
     }
 
-    (
-        num_adjusted as usize,
-        HaarSegResult {
-            segments,
-            seg_values,
-        },
-    )
+    let mut segmentation = Segmentation::with_values(segments, seg_values);
+    segmentation.update_stats(values);
+
+    (num_adjusted as usize, segmentation)
 }
 
 /// Implement simple approach for aberrant interval detection as proposed in HaarSeg paper.
 ///
-/// Segments with a value above `m * sigma` will be accepted, the others rejected.
-pub fn reject_nonaberrant(
-    seg_result: &HaarSegResult,
-    intensities: &[f64],
-    m: f64,
-) -> HaarSegResult {
+/// Segments with a log2 value above `m * sigma` will be accepted, the others rejected.
+pub fn reject_nonaberrant(segmentation: &Segmentation, values: &[f64], m: f64) -> Segmentation {
     // Estimate sigma.
-    let est_sigma = seg_result
-        .seg_values
+    let est_sigma = segmentation
+        .values
         .iter()
-        .zip(intensities.iter())
-        .map(|(y, x)| (*y - *x).abs())
+        .map(|x| x.log2())
+        .zip(values.iter())
+        .map(|(y, x)| (y - *x).abs())
         .collect::<Vec<f64>>()
         .as_slice()
         .median() / 0.6745;
 
-    // Rebuild new `HaarSegResult`.
-    let mut segments: Vec<HaarSegment> = Vec::new();
+    // Rebuild new `Segmentation`.
+    let mut segments: Vec<Segment> = Vec::new();
     let mut seg_values: Vec<f64> = Vec::new();
-    let mut curr: Option<HaarSegment> = None;
-    for seg in &seg_result.segments {
+    let mut curr: Option<Segment> = None;
+    for seg in &segmentation.segments {
         let range = seg.range.clone();
-        let value = if seg.value.abs() > m * est_sigma {
-            seg.value
+        let (mean, mean_log2) = if seg.mean_log2.abs() > m * est_sigma {
+            (seg.mean, seg.mean_log2)
         } else {
-            0.0
+            (1.0, 0.0)
         };
 
         curr = match curr {
             Some(curr) => {
-                if value != curr.value {
+                if mean_log2 != curr.mean_log2 {
                     // Start new segment.
                     segments.push(curr);
-                    Some(HaarSegment { range, value })
+                    Some(Segment {
+                        range,
+                        mean,
+                        mean_log2,
+                        std_dev: 0.0,
+                        std_dev_log2: 0.0,
+                    })
                 } else {
                     // Extend old segment.
-                    Some(HaarSegment {
+                    Some(Segment {
                         range: Range {
                             end: seg.range.end,
                             ..curr.range
@@ -342,83 +331,68 @@ pub fn reject_nonaberrant(
                     })
                 }
             }
-            None => Some(HaarSegment { range, value }),
+            None => Some(Segment {
+                range,
+                mean,
+                mean_log2,
+                std_dev: 0.0,
+                std_dev_log2: 0.0,
+            }),
         };
 
-        seg_values.extend_from_slice(&vec![value; seg.range.len()]);
+        seg_values.extend_from_slice(&vec![mean; seg.range.len()]);
     }
-    // Add last segment, if any, seg_values are already expanded.
+    // Add last segment, if any, values are already expanded.
     if let Some(curr) = curr {
         segments.push(curr);
     }
 
-    assert_eq!(seg_values.len(), intensities.len());
-    assert!(segments.len() <= seg_result.segments.len());
+    assert_eq!(values.len(), values.len());
+    assert!(segments.len() <= segmentation.segments.len());
 
-    HaarSegResult {
-        segments,
-        seg_values,
-    }
-}
+    let mut segmentation = Segmentation::with_values(segments, seg_values);
+    segmentation.update_stats(values);
 
-// Some helper functions for `HaarSegment` to use in `reject_nonaberrant_pvalue()`.
-impl HaarSegment {
-    /// Compute P-value of segment.
-    fn p_value(&self, intensities: &[f64], p_value_threshold: f64) -> f64 {
-        // TODO: robust handling of X/Y chromosome
-        // TODO: is this correct?
-        // Note that coverages are already normalized.
-
-        // Compute test statistics and obtain distribution.
-        let t = (1.0 - self.value) / self.cov_sd(intensities) * (self.range.len() as f64).sqrt();
-        let dist = StudentsT::new(0.0, 1.0, (self.range.len() - 1) as f64)
-            .expect("Could not find t distribution");
-        // Compute p value.
-        let p = 1.0 - dist.cdf(t);
-        // println!("Uncorrected P-value: {}", p);
-        // Return P-value corrected for multiple testing.
-        p * p_value_threshold / (self.range.len() as f64)
-    }
-
-    // Compute SD of intenties of segment.
-    fn cov_sd(&self, intensities: &[f64]) -> f64 {
-        (intensities[self.range.clone()]
-            .iter()
-            .map(|x| (x - self.value) * (x - self.value))
-            .sum::<f64>() / (self.range.len() as f64 - 1.0))
-            .sqrt()
-    }
+    segmentation
 }
 
 /// Implement simple approach for aberrant interval detection as proposed in CNVnator paper.
 ///
 /// Segments with a value above `m * sigma` will be accepted, the others rejected.
 pub fn reject_nonaberrant_pvalue(
-    seg_result: &HaarSegResult,
-    intensities: &[f64],
+    segmentation: &Segmentation,
+    values: &[f64],
     p_value_threshold: f64,
-) -> HaarSegResult {
-    // Rebuild new `HaarSegResult`.
-    let mut segments: Vec<HaarSegment> = Vec::new();
+) -> Segmentation {
+    // Rebuild new `Segmentation`.
+    let mut segments: Vec<Segment> = Vec::new();
     let mut seg_values: Vec<f64> = Vec::new();
-    let mut curr: Option<HaarSegment> = None;
-    for seg in &seg_result.segments {
+    let mut curr: Option<Segment> = None;
+    for seg in &segmentation.segments {
         let range = seg.range.clone();
-        let value = if range.len() >= 2 && seg.p_value(intensities, p_value_threshold) < p_value_threshold {
-            seg.value
+        let (mean, mean_log2) = if range.len() >= 2
+            && seg.p_value_significant_student(p_value_threshold) < p_value_threshold
+        {
+            (seg.mean, seg.mean_log2)
         } else {
-            0.0
+            (1.0, 0.0)
         };
 
         curr = match curr {
             Some(curr) => {
-                if value != curr.value {
+                if mean != curr.mean {
                     // Start new segment.
                     segments.push(curr);
-                    Some(HaarSegment { range, value })
+                    Some(Segment {
+                        range,
+                        mean,
+                        mean_log2,
+                        std_dev: 0.0,
+                        std_dev_log2: 0.0,
+                    })
                 } else {
                     // Extend old segment.
-                    Some(HaarSegment {
+                    Some(Segment {
                         range: Range {
                             end: seg.range.end,
                             ..curr.range
@@ -427,23 +401,29 @@ pub fn reject_nonaberrant_pvalue(
                     })
                 }
             }
-            None => Some(HaarSegment { range, value }),
+            None => Some(Segment {
+                range,
+                mean,
+                mean_log2,
+                std_dev: 0.0,
+                std_dev_log2: 0.0,
+            }),
         };
 
-        seg_values.extend_from_slice(&vec![value; seg.range.len()]);
+        seg_values.extend_from_slice(&vec![mean; seg.range.len()]);
     }
     // Add last segment, if any, seg_values are already expanded.
     if let Some(curr) = curr {
         segments.push(curr);
     }
 
-    assert_eq!(seg_values.len(), intensities.len());
-    assert!(segments.len() <= seg_result.segments.len());
+    assert_eq!(seg_values.len(), values.len());
+    assert!(segments.len() <= segmentation.segments.len());
 
-    HaarSegResult {
-        segments,
-        seg_values,
-    }
+    let mut segmentation = Segmentation::with_values(segments, seg_values);
+    segmentation.update_stats(values);
+
+    segmentation
 }
 
 #[cfg(test)]
@@ -452,10 +432,10 @@ mod tests {
 
     #[test]
     fn haar_small_example() {
-        let intensities = vec![0.0, 0.1, 0.2, 0.8, 0.9, 1.1, 0.7, 0.0, 0.0];
-        let chrom_pos = vec![0..(intensities.len())];
+        let values = vec![0.0, 0.1, 0.2, 0.8, 0.9, 1.1, 0.7, 0.0, 0.0];
+        let chrom_pos = vec![0..(values.len())];
 
-        let result = seg_haar(&intensities, None, None, &chrom_pos, 0.001, 1, 5);
+        let result = seg_haar(&values, None, None, &chrom_pos, 0.001, 1, 5);
 
         assert_eq!(result.segments.len(), 3);
         assert_eq!(result.segments[0].range, 0..3);

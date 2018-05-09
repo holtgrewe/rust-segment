@@ -14,8 +14,9 @@ extern crate statrs;
 
 pub mod haarseg;
 pub mod haarseglib;
+pub mod shared;
 mod stats;
 
-pub use haarseg::{
-    adjust_breaks, reject_nonaberrant, reject_nonaberrant_pvalue, seg_haar, HaarSegResult,
-};
+pub use haarseg::{adjust_breaks, reject_nonaberrant, reject_nonaberrant_pvalue, seg_haar};
+
+pub use haarseg::{Segment, Segmentation};
