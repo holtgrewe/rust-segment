@@ -99,13 +99,17 @@ pub fn seg_haar(
             );
         }
         // No non-stationary variance for now, estimate sigma.
-        conv_result
+        let tmp_filt = conv_result
             .iter()
             .map(|x| x.abs())
             .filter(|&x| x > 1e-5)
-            .collect::<Vec<f64>>()
-            .as_slice()
-            .median() / NORMAL_MAD_SCALE * 5.0
+            .collect::<Vec<f64>>();
+        let tmp_filt = if tmp_filt.len() == 0 {
+            conv_result.iter().map(|x| x.abs()).collect::<Vec<f64>>()
+        } else {
+            tmp_filt
+        };
+        tmp_filt.as_slice().median() / NORMAL_MAD_SCALE * 5.0
     };
 
     // Perform chromosome-wise segmentation.
@@ -205,6 +209,7 @@ pub fn seg_haar(
                 &Segment {
                     range,
                     mean,
+                    copy_state: None,
                     std_dev,
                     mean_log2,
                     std_dev_log2,
@@ -317,6 +322,7 @@ pub fn reject_nonaberrant(segmentation: &Segmentation, values: &[f64], m: f64) -
                         range,
                         mean,
                         mean_log2,
+                        copy_state: None,
                         std_dev: 0.0,
                         std_dev_log2: 0.0,
                     })
@@ -335,6 +341,7 @@ pub fn reject_nonaberrant(segmentation: &Segmentation, values: &[f64], m: f64) -
                 range,
                 mean,
                 mean_log2,
+                copy_state: None,
                 std_dev: 0.0,
                 std_dev_log2: 0.0,
             }),
@@ -387,6 +394,7 @@ pub fn reject_nonaberrant_pvalue(
                         range,
                         mean,
                         mean_log2,
+                        copy_state: None,
                         std_dev: 0.0,
                         std_dev_log2: 0.0,
                     })
@@ -405,6 +413,7 @@ pub fn reject_nonaberrant_pvalue(
                 range,
                 mean,
                 mean_log2,
+                copy_state: None,
                 std_dev: 0.0,
                 std_dev_log2: 0.0,
             }),

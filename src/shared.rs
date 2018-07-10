@@ -6,11 +6,21 @@ use statrs::distribution::{StudentsT, Univariate};
 
 use super::stats::*;
 
+#[derive(Debug, Clone, Copy)]
+pub enum CopyState {
+    Deletion,
+    Neutral,
+    Duplication,
+}
+
 /// A segment with an optional score.
 #[derive(Debug, Clone)]
 pub struct Segment {
     /// Range of the segment in the signal array.
     pub range: Range<usize>,
+
+    /// Optional copy state.
+    pub copy_state: Option<CopyState>,
 
     /// Mean of the segment in normal number space.
     pub mean: f64,
@@ -103,6 +113,8 @@ pub struct Segmentation {
     pub values: Vec<f64>,
     /// The signals/intensities (from the segment) in log2 space.
     pub values_log2: Vec<f64>,
+    /// Optionally, the copy number states.
+    pub cn_states: Option<Vec<CopyState>>,
 }
 
 // Constructors
@@ -113,6 +125,7 @@ impl Segmentation {
             segments: Vec::new(),
             values: Vec::new(),
             values_log2: Vec::new(),
+            cn_states: None,
         }
     }
 
@@ -123,6 +136,7 @@ impl Segmentation {
             segments,
             values,
             values_log2,
+            cn_states: None,
         }
     }
 
@@ -136,6 +150,7 @@ impl Segmentation {
             segments,
             values,
             values_log2,
+            cn_states: None,
         }
     }
 }
